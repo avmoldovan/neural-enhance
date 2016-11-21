@@ -30,6 +30,9 @@ import itertools
 import threading
 import collections
 
+import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # Configure all options first so we can later custom-load other libraries (Theano) based on device specified by user.
 parser = argparse.ArgumentParser(description='Generate a new image by applying style onto a content image.',
@@ -72,6 +75,9 @@ add_arg('--generator-start',    default=0, type=int,                help='Epoch 
 add_arg('--discriminator-start',default=1, type=int,                help='Epoch count to update the discriminator.')
 add_arg('--adversarial-start',  default=2, type=int,                help='Epoch for generator to use discriminator.')
 add_arg('--device',             default='cpu', type=str,            help='Name of the CPU/GPU to use, for Theano.')
+add_arg('--watch',              default=False, action='store_true', help="monitor input-directory indefinitely")
+add_arg('--input-directory',    default=None,                       help="monitor directory for images")
+add_arg('--output-directory',   default=None,                       help="save images here")
 args = parser.parse_args()
 
 
@@ -511,10 +517,10 @@ class NeuralEnhancer(object):
         if args.train:
             print('{}Training {} epochs on random image sections with batch size {}.{}'\
                   .format(ansi.BLUE_B, args.epochs, args.batch_size, ansi.BLUE))
-        else:
-            if len(args.files) == 0: error("Specify the image(s) to enhance on the command-line.")
-            print('{}Enhancing {} image(s) specified on the command-line.{}'\
-                  .format(ansi.BLUE_B, len(args.files), ansi.BLUE))
+        # else:
+        #     if len(args.files) == 0: error("Specify the image(s) to enhance on the command-line.")
+        #     print('{}Enhancing {} image(s) specified on the command-line.{}'\
+        #           .format(ansi.BLUE_B, len(args.files), ansi.BLUE))
 
         self.thread = DataLoader() if loader else None
         self.model = Model()
@@ -625,12 +631,55 @@ class NeuralEnhancer(object):
 
         return scipy.misc.toimage(output, cmin=0, cmax=255)
 
+class InputFileHandler(FileSystemEventHandler):
+    def setup(self, enhancer, output_directory):
+        self.enhancer = enhancer
+        self.outdir = output_directory
+
+    def process(self, infile):
+        basename = os.path.basename(infile)
+        if basename[0] == '.' or basename[0] == '_':
+            print("Skipping infile: {}".format(infile))
+            return;
+        print("Processing infile: {}".format(infile))
+        barename = os.path.splitext(basename)[0]
+
+        img = scipy.ndimage.imread(infile, mode='RGB')
+        out = self.enhancer.process(img)
+        outfile = os.path.join(self.outdir, "{}.png".format(barename))
+        out.save(outfile)
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.process(event.src_path)
 
 if __name__ == "__main__":
     if args.train:
         args.zoom = 2**(args.generator_upscale - args.generator_downscale)
         enhancer = NeuralEnhancer(loader=True)
         enhancer.train()
+    elif args.input_directory:
+        enhancer = NeuralEnhancer(loader=False)
+        event_handler = InputFileHandler()
+        event_handler.setup(enhancer, args.output_directory)
+
+        for f in sorted(os.listdir(args.input_directory)):
+            full_path = os.path.join(args.input_directory, f)
+            if os.path.isfile(full_path):
+                event_handler.process(full_path)
+
+        if args.watch:
+            print("Watching input directory {}".format(args.input_directory))
+            observer = Observer()
+            observer.schedule(event_handler, path=args.input_directory, recursive=False)
+            observer.start()
+
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                observer.stop()
+            observer.join()
     else:
         enhancer = NeuralEnhancer(loader=False)
         for filename in args.files:
