@@ -632,8 +632,9 @@ class NeuralEnhancer(object):
         return scipy.misc.toimage(output, cmin=0, cmax=255)
 
 class InputFileHandler(FileSystemEventHandler):
-    def setup(self, enhancer, output_directory):
+    def setup(self, enhancer, input_directory, output_directory):
         self.enhancer = enhancer
+        self.indir = input_directory
         self.outdir = output_directory
 
     def process(self, infile):
@@ -642,12 +643,18 @@ class InputFileHandler(FileSystemEventHandler):
             print("Skipping infile: {}".format(infile))
             return;
         print("Processing infile: {}".format(infile))
+        common_prefix = os.path.commonprefix([infile, "{}/".format(self.indir)])
+        inpath_to_append = os.path.dirname(infile[len(common_prefix):])
         barename = os.path.splitext(basename)[0]
 
         img = scipy.ndimage.imread(infile, mode='RGB')
         out = self.enhancer.process(img)
-        outfile = os.path.join(self.outdir, "{}.png".format(barename))
+        outfile = os.path.join(self.outdir, inpath_to_append, "{}.png".format(barename))
+        dirname = os.path.dirname(outfile)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
         out.save(outfile)
+        print("Saved: {}".format(outfile))
 
     def on_modified(self, event):
         if not event.is_directory:
@@ -661,17 +668,19 @@ if __name__ == "__main__":
     elif args.input_directory:
         enhancer = NeuralEnhancer(loader=False)
         event_handler = InputFileHandler()
-        event_handler.setup(enhancer, args.output_directory)
+        event_handler.setup(enhancer, args.input_directory, args.output_directory)
 
-        for f in sorted(os.listdir(args.input_directory)):
-            full_path = os.path.join(args.input_directory, f)
-            if os.path.isfile(full_path):
-                event_handler.process(full_path)
+        files = sorted([os.path.join(dp, f) for dp, dn, fn in os.walk(args.input_directory) for f in fn])
+        for f in files:
+            if os.path.isfile(f):
+                event_handler.process(f)
+            else:
+                print("not file: {}".format(f))
 
         if args.watch:
             print("Watching input directory {}".format(args.input_directory))
             observer = Observer()
-            observer.schedule(event_handler, path=args.input_directory, recursive=False)
+            observer.schedule(event_handler, path=args.input_directory, recursive=True)
             observer.start()
 
             try:
