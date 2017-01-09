@@ -44,6 +44,7 @@ add_arg('--type',               default='photo', type=str,          help='Name o
 add_arg('--model',              default='default', type=str,        help='Specific trained version of the model.')
 add_arg('--train',              default=False, type=str,            help='File pattern to load for training.')
 add_arg('--train-scales',       default=0, type=int,                help='Randomly resize images this many times.')
+add_arg('--scale-down',         default=0, type=float,              help='Randomly scale down images by up to this factor.')
 add_arg('--train-blur',         default=None, type=int,             help='Sigma value for gaussian blur preprocess.')
 add_arg('--train-noise',        default=None, type=float,           help='Radius for preprocessing gaussian blur.')
 add_arg('--train-jpeg',         default=[], nargs='+', type=int,    help='JPEG compression level & range in preproc.')
@@ -194,14 +195,24 @@ class DataLoader(threading.Thread):
     def add_to_buffer(self, file_index):
         f = self.files[file_index]
         filename = os.path.join(self.cwd, f)
+        scale_down = 0.0
+        if args.scale_down > 0:
+            scale_down = random.uniform(args.scale_down, 1.0)
         try:
             orig = PIL.Image.open(filename).convert('RGB')
             scale = 2 ** random.randint(0, args.train_scales)
             if scale > 1 and all(s//scale >= args.batch_shape for s in orig.size):
                 orig = orig.resize((orig.size[0]//scale, orig.size[1]//scale), resample=PIL.Image.LANCZOS)
+
+            if scale_down > 0:
+                x_scale = int(scale_down * orig.size[0])
+                y_scale = int(scale_down * orig.size[1])
+                orig = orig.resize((x_scale, y_scale), resample=PIL.Image.LANCZOS)
+
             if any(s < args.batch_shape for s in orig.size):
                 raise ValueError('Image is too small for training with size {}'.format(orig.size))
         except Exception as e:
+            print(e)
             warn('Could not load `{}` as image.'.format(filename),
                  '  - Try fixing or removing the file before next run.')
             del self.files[file_index]
@@ -216,9 +227,14 @@ class DataLoader(threading.Thread):
             filename = os.path.join(self.cwd, f)
             try:
                 seed = PIL.Image.open(filename).convert('RGB')
+                if scale_down > 0:
+                    x_scale = int(scale_down * seed.size[0])
+                    y_scale = int(scale_down * seed.size[1])
+                    seed = seed.resize((x_scale, y_scale), resample=PIL.Image.LANCZOS)
                 if any(s < self.seed_shape for s in seed.size):
                     raise ValueError('Image is too small for seed size (found {}, expected {})'.format(seed.size, self.seed_shape))
             except Exception as e:
+                print(e)
                 warn('Could not load `{}` as seed image.'.format(filename),
                      '  - Try fixing or removing the file before next run. ({})'.format(e))
                 del self.files[file_index]
